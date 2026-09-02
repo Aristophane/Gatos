@@ -61,6 +61,10 @@ async function main() {
       slug: "aura-nova",
       type: "ARTIST",
       delegationMode: "DELEGATED",
+      mandateStatus: "ACTIVE",
+      mandateGrantedAt: new Date("2026-08-01"),
+      mandateGrantedByEmail: "contact@auranova.com",
+      mandateToken: "mandate_aura_nova_demo",
       bio: "Duo pop électronique futuriste. Prochain album 'Éclipse' en préparation.",
       brandColor: "#f43f5e",
       avatarUrl: "https://images.unsplash.com/photo-1516450360452-9312f5e86fc7?w=300&h=300&fit=crop",
@@ -142,6 +146,7 @@ async function main() {
       slug: "komorebi-club",
       type: "ARTIST",
       delegationMode: "AUTONOMOUS",
+      mandateStatus: "NOT_REQUIRED",
       bio: "Lo-Fi Beats & Ambient Jazz.",
       brandColor: "#0284c7",
       avatarUrl: "https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=300&h=300&fit=crop",
@@ -164,6 +169,9 @@ async function main() {
       slug: "l-ampli-bleu",
       type: "VENUE",
       delegationMode: "DELEGATED",
+      mandateStatus: "ACTIVE",
+      mandateGrantedAt: new Date("2026-08-10"),
+      mandateGrantedByEmail: "booking@amplibleu.fr",
       bio: "Scène indie rock & cocktails maison au cœur de Belleville.",
       brandColor: "#7c3aed",
       avatarUrl: "https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&h=300&fit=crop",
@@ -178,7 +186,7 @@ async function main() {
     },
   });
 
-  // Profil 4 : Solène & The Waves (Artiste - Mode Délégué)
+  // Profil 4 : Solène & The Waves (Artiste - Mode Délégué, Mandat en Attente)
   await prisma.managedProfile.create({
     data: {
       agencyWorkspaceId: agency.id,
@@ -186,6 +194,8 @@ async function main() {
       slug: "solene-waves",
       type: "ARTIST",
       delegationMode: "DELEGATED",
+      mandateStatus: "PENDING",
+      mandateToken: "mandate_solene_waves_demo",
       bio: "Indie Surf Pop.",
       brandColor: "#10b981",
       avatarUrl: "https://images.unsplash.com/photo-1520523839898-50712825e3a7?w=300&h=300&fit=crop",
@@ -200,6 +210,7 @@ async function main() {
       slug: "milo-vesper",
       type: "ARTIST",
       delegationMode: "AUTONOMOUS",
+      mandateStatus: "NOT_REQUIRED",
       bio: "Folk acoustique & récits de voyage.",
       brandColor: "#d97706",
       avatarUrl: "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=300&h=300&fit=crop",

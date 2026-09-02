@@ -16,8 +16,15 @@ import {
   Mic2,
   Layers,
   Send,
-  AlertCircle
+  AlertCircle,
+  PlusCircle,
+  ShieldCheck,
+  Copy,
+  Check,
+  X,
+  Share2
 } from "lucide-react";
+import { DiscoveredAccount } from "@/modules/connectors/oauth/types";
 
 interface Target {
   id: string;
@@ -53,12 +60,17 @@ interface Profile {
   slug: string;
   type: string;
   delegationMode: string;
+  mandateStatus: string;
+  mandateGrantedAt?: string | null;
+  mandateGrantedByEmail?: string | null;
+  mandateToken?: string | null;
   avatarUrl: string | null;
   bio: string | null;
   brandColor: string | null;
   channelConnections: {
     id: string;
     provider: string;
+    externalAccountId: string;
     externalAccountName: string;
     isConnected: boolean;
   }[];
@@ -78,9 +90,19 @@ interface DashboardViewProps {
   profiles: Profile[];
 }
 
-export function DashboardView({ agencyName, profiles }: DashboardViewProps) {
+export function DashboardView({ agencyName, profiles: initialProfiles }: DashboardViewProps) {
+  const [profiles, setProfiles] = useState<Profile[]>(initialProfiles);
   const [selectedProfileSlug, setSelectedProfileSlug] = useState<string>(profiles[0]?.slug || "");
   const [occurrencesState, setOccurrencesState] = useState<Record<string, { status: string; loading: boolean; url?: string }>>({});
+
+  // Modal connecteurs
+  const [isConnectorModalOpen, setIsConnectorModalOpen] = useState(false);
+  const [discoveredAccounts, setDiscoveredAccounts] = useState<DiscoveredAccount[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
+  const [attachingAccountKey, setAttachingAccountKey] = useState<string | null>(null);
+
+  // Copie lien de mandat
+  const [copiedMandate, setCopiedMandate] = useState(false);
 
   const activeProfile = profiles.find((p) => p.slug === selectedProfileSlug) || profiles[0];
 
@@ -151,6 +173,77 @@ export function DashboardView({ agencyName, profiles }: DashboardViewProps) {
     }
   };
 
+  // Découverte des comptes sociaux via OAuth Resolver
+  const handleOpenConnectorModal = async () => {
+    setIsConnectorModalOpen(true);
+    setIsDiscovering(true);
+    try {
+      const res = await fetch("/api/connectors/discover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: "META" }),
+      });
+      const data = await res.json();
+      if (res.ok && data.accounts) {
+        setDiscoveredAccounts(data.accounts);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
+
+  // Attachement d'un compte découvert au profil artiste courant
+  const handleAttachAccount = async (account: DiscoveredAccount) => {
+    if (!activeProfile) return;
+    const accountKey = `${account.provider}_${account.externalAccountId}`;
+    setAttachingAccountKey(accountKey);
+
+    try {
+      const res = await fetch("/api/connectors/attach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          managedProfileId: activeProfile.id,
+          account,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Erreur d'association du compte");
+
+      // Mettre à jour l'état local du profil
+      setProfiles((prev) =>
+        prev.map((p) => {
+          if (p.id !== activeProfile.id) return p;
+          const exists = p.channelConnections.some((c) => c.id === data.connection.id);
+          return {
+            ...p,
+            channelConnections: exists
+              ? p.channelConnections.map((c) => (c.id === data.connection.id ? data.connection : c))
+              : [...p.channelConnections, data.connection],
+          };
+        })
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`Erreur : ${msg}`);
+    } finally {
+      setAttachingAccountKey(null);
+    }
+  };
+
+  // Copier le lien de mandat de l'artiste
+  const handleCopyMandateLink = () => {
+    if (!activeProfile.mandateToken) return;
+    const appUrl = window.location.origin;
+    const url = `${appUrl}/mandate/${activeProfile.mandateToken}`;
+    navigator.clipboard.writeText(url);
+    setCopiedMandate(true);
+    setTimeout(() => setCopiedMandate(false), 2500);
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       {/* Top Navigation */}
@@ -168,7 +261,7 @@ export function DashboardView({ agencyName, profiles }: DashboardViewProps) {
         <div className="flex items-center gap-3">
           <div className="text-xs bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1.5 rounded-full flex items-center gap-2 font-medium">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-            Connecteur Meta : Actif (Simulé)
+            Connecteurs : Meta Résolu (Prêt X / Snap)
           </div>
         </div>
       </header>
@@ -219,8 +312,8 @@ export function DashboardView({ agencyName, profiles }: DashboardViewProps) {
                       </span>
                     </div>
 
-                    {/* Delegation mode badge */}
-                    <div className="mt-1.5 flex items-center gap-2">
+                    {/* Delegation mode & Mandate badge */}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                       <span
                         className={`text-[11px] px-2 py-0.5 rounded-md font-medium border ${
                           profile.delegationMode === "DELEGATED"
@@ -231,8 +324,20 @@ export function DashboardView({ agencyName, profiles }: DashboardViewProps) {
                         {profile.delegationMode === "DELEGATED" ? "Délégation Agence" : "Artiste Autonome"}
                       </span>
 
+                      {profile.delegationMode === "DELEGATED" && (
+                        <span
+                          className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+                            profile.mandateStatus === "ACTIVE"
+                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                              : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                          }`}
+                        >
+                          {profile.mandateStatus === "ACTIVE" ? "Mandat Actif" : "Mandat en Attente"}
+                        </span>
+                      )}
+
                       {profile.channelConnections.length > 0 && (
-                        <div className="flex items-center gap-1 text-slate-400">
+                        <div className="flex items-center gap-1 text-slate-400 ml-auto">
                           {profile.channelConnections.some((c) => c.provider === "INSTAGRAM_BUSINESS") && (
                             <Instagram className="w-3.5 h-3.5 text-pink-400" />
                           )}
@@ -277,23 +382,78 @@ export function DashboardView({ agencyName, profiles }: DashboardViewProps) {
                     </div>
                   </div>
 
-                  {/* Lien en Bio Button */}
-                  <a
-                    href={`/bio/${activeProfile.slug}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm font-medium text-slate-200 border border-slate-700 transition-colors shadow-sm"
-                  >
-                    <ExternalLink className="w-4 h-4 text-rose-400" />
-                    Voir le Lien en Bio
-                  </a>
+                  <div className="flex items-center gap-2">
+                    {/* Connect Channel Button */}
+                    <button
+                      onClick={handleOpenConnectorModal}
+                      className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-sm font-semibold text-white transition-colors shadow-sm shadow-rose-950/40"
+                    >
+                      <PlusCircle className="w-4 h-4" />
+                      Connecter Réseau
+                    </button>
+
+                    {/* Lien en Bio Button */}
+                    <a
+                      href={`/bio/${activeProfile.slug}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sm font-medium text-slate-200 border border-slate-700 transition-colors shadow-sm"
+                    >
+                      <ExternalLink className="w-4 h-4 text-rose-400" />
+                      Lien en Bio
+                    </a>
+                  </div>
                 </div>
 
+                {/* Mandate & Delegation of Identity Banner */}
+                {activeProfile.delegationMode === "DELEGATED" && (
+                  <div className="mt-5 p-3.5 rounded-xl bg-slate-950/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <ShieldCheck className={`w-5 h-5 ${activeProfile.mandateStatus === "ACTIVE" ? "text-emerald-400" : "text-amber-400"}`} />
+                      <div>
+                        <div className="font-semibold text-slate-200">
+                          {activeProfile.mandateStatus === "ACTIVE" ? (
+                            <span>Mandat d'Identité Actif</span>
+                          ) : (
+                            <span>Mandat d'Identité en Attente de Signature</span>
+                          )}
+                        </div>
+                        <div className="text-slate-400 text-[11px]">
+                          {activeProfile.mandateStatus === "ACTIVE" ? (
+                            <span>L'agence Thermidor Studios détient le mandat de gestion et de publication pour ce profil.</span>
+                          ) : (
+                            <span>L'artiste doit signer le mandat électronique pour autoriser la publication déléguée.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {activeProfile.mandateToken && (
+                      <button
+                        onClick={handleCopyMandateLink}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium transition-colors"
+                      >
+                        {copiedMandate ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-emerald-300">Lien copié !</span>
+                          </>
+                        ) : (
+                          <>
+                            <Share2 className="w-3.5 h-3.5 text-rose-400" />
+                            <span>Copier lien de mandat artiste</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {/* Connections summary */}
-                <div className="mt-6 pt-4 border-t border-slate-800/80 flex flex-wrap items-center gap-4">
+                <div className="mt-5 pt-4 border-t border-slate-800/80 flex flex-wrap items-center gap-4">
                   <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Comptes Connectés :</span>
                   {activeProfile.channelConnections.length === 0 ? (
-                    <span className="text-xs text-slate-500 italic">Aucun compte social connecté pour le moment.</span>
+                    <span className="text-xs text-slate-500 italic">Aucun compte social connecté pour le moment. Cliquez sur "Connecter Réseau".</span>
                   ) : (
                     activeProfile.channelConnections.map((conn) => (
                       <div
@@ -446,6 +606,114 @@ export function DashboardView({ agencyName, profiles }: DashboardViewProps) {
           )}
         </div>
       </div>
+
+      {/* Modal de Résolution des Connecteurs (Meta, et prêt pour X/Snap) */}
+      {isConnectorModalOpen && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-xl p-6 shadow-2xl relative">
+            <div className="flex items-center justify-between border-b border-slate-800/80 pb-4 mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Share2 className="w-5 h-5 text-rose-500" />
+                  Résolution des Connecteurs Meta
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Découverte des Pages Facebook et comptes Instagram Business éligibles.
+                </p>
+              </div>
+              <button
+                onClick={() => setIsConnectorModalOpen(false)}
+                className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {isDiscovering ? (
+              <div className="py-12 text-center space-y-3">
+                <span className="w-8 h-8 border-2 border-rose-500 border-t-transparent rounded-full animate-spin inline-block" />
+                <p className="text-sm text-slate-300">Interrogation de l'API Graph Meta...</p>
+              </div>
+            ) : discoveredAccounts.length === 0 ? (
+              <div className="py-8 text-center text-slate-400 text-sm">
+                Aucun compte découvert via cette session Meta.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                <div className="text-xs text-slate-400 mb-2 font-medium">
+                  Comptes détectés pour association à <strong className="text-white">{activeProfile.name}</strong> :
+                </div>
+                {discoveredAccounts.map((account) => {
+                  const accountKey = `${account.provider}_${account.externalAccountId}`;
+                  const isAttaching = attachingAccountKey === accountKey;
+                  const isAlreadyConnected = activeProfile.channelConnections.some(
+                    (c) => c.provider === account.provider && c.externalAccountId === account.externalAccountId
+                  );
+
+                  return (
+                    <div
+                      key={accountKey}
+                      className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-3"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 flex-shrink-0">
+                          {account.avatarUrl ? (
+                            <img src={account.avatarUrl} alt={account.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center font-bold text-xs text-slate-400">
+                              {account.name.substring(0, 2).toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            {account.provider === "INSTAGRAM_BUSINESS" ? (
+                              <Instagram className="w-3.5 h-3.5 text-pink-400" />
+                            ) : (
+                              <Facebook className="w-3.5 h-3.5 text-blue-400" />
+                            )}
+                            <span className="font-semibold text-sm text-white">{account.name}</span>
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {account.handle || account.provider}
+                            {account.metadata?.category ? ` • ${String(account.metadata.category)}` : ""}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        {isAlreadyConnected ? (
+                          <span className="text-xs text-emerald-400 font-medium bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-lg flex items-center gap-1">
+                            <Check className="w-3 h-3" /> Connecté
+                          </span>
+                        ) : (
+                          <button
+                            disabled={isAttaching}
+                            onClick={() => handleAttachAccount(account)}
+                            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white transition-colors disabled:opacity-50"
+                          >
+                            {isAttaching ? "Association..." : "Associer"}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="mt-6 pt-4 border-t border-slate-800 text-xs text-slate-500 flex items-center justify-between">
+              <span>Extensibilité : Connecteurs X, Snap et TikTok prêts via le registre.</span>
+              <button
+                onClick={() => setIsConnectorModalOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

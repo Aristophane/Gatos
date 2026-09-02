@@ -74,19 +74,30 @@ enum DelegationMode {
   DELEGATED   // L'agence se connecte et publie pour l'artiste
 }
 
+enum MandateStatus {
+  NOT_REQUIRED // En mode autonome
+  ACTIVE       // Mandat accordé et actif
+  PENDING      // En attente de validation par l'artiste
+  REVOKED      // Révoqué
+}
+
 model ManagedProfile {
-  id                String          @id @default(cuid())
-  agencyWorkspaceId String
-  name              String
-  slug              String          @unique
-  type              ProfileType     @default(ARTIST)
-  delegationMode    DelegationMode  @default(DELEGATED)
-  avatarUrl         String?
-  bio               String?
-  brandColor        String?         @default("#e11d48")
-  socialLinks       Json?           // { instagram: "...", facebook: "...", spotify: "..." }
-  createdAt         DateTime        @default(now())
-  updatedAt         DateTime        @updatedAt
+  id                    String          @id @default(cuid())
+  agencyWorkspaceId     String
+  name                  String
+  slug                  String          @unique
+  type                  ProfileType     @default(ARTIST)
+  delegationMode        DelegationMode  @default(DELEGATED)
+  mandateStatus         MandateStatus   @default(ACTIVE)
+  mandateGrantedAt      DateTime?
+  mandateGrantedByEmail String?
+  mandateToken          String?         @unique
+  avatarUrl             String?
+  bio                   String?
+  brandColor            String?         @default("#e11d48")
+  socialLinks           Json?           // { instagram: "...", facebook: "...", spotify: "..." }
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
   agencyWorkspace   AgencyWorkspace @relation(fields: [agencyWorkspaceId], references: [id], onDelete: Cascade)
   profileAccesses   ProfileAccess[]
