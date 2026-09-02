@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { decryptString } from "@/lib/crypto";
 import { connectorRegistry } from "../connectors/registry";
 import { SupportedFormat } from "../connectors/types";
 
@@ -71,7 +72,11 @@ export class PublisherService {
         },
         targets: {
           include: {
-            channelConnection: true,
+            channelConnection: {
+              include: {
+                credential: true,
+              },
+            },
           },
         },
       },
@@ -122,11 +127,21 @@ export class PublisherService {
         occurrence.variant.assets[0]?.asset?.publicUrl ||
         undefined;
 
+      let accessToken: string | undefined = undefined;
+      if (target.channelConnection.credential?.encryptedToken) {
+        try {
+          accessToken = decryptString(target.channelConnection.credential.encryptedToken);
+        } catch {
+          accessToken = target.channelConnection.credential.encryptedToken;
+        }
+      }
+
       const attemptStart = new Date();
       try {
         const publishResult = await connector.publish({
           targetId: target.id,
           externalAccountId: target.channelConnection.externalAccountId,
+          accessToken,
           format: occurrence.variant.format as SupportedFormat,
           caption: occurrence.variant.caption,
           mediaUrl,

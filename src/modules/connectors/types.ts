@@ -12,6 +12,7 @@ export interface Capabilities {
 export interface PreparedPublication {
   targetId: string;
   externalAccountId: string;
+  accessToken?: string;
   format: SupportedFormat;
   caption: string;
   mediaUrl?: string;

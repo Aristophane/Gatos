@@ -1,14 +1,14 @@
 import { ChannelProvider } from "@prisma/client";
 import { PublishingConnector } from "./types";
-import { MockPublishingConnector } from "./mock-connector";
+import { MetaPublishingConnector } from "./meta/meta-publisher";
 
 class ConnectorRegistry {
   private connectors: Map<string, PublishingConnector> = new Map();
 
   constructor() {
-    // Par défaut en dev/test, on injecte les mocks
-    this.connectors.set("INSTAGRAM_BUSINESS", new MockPublishingConnector("INSTAGRAM"));
-    this.connectors.set("FACEBOOK_PAGE", new MockPublishingConnector("FACEBOOK"));
+    // Utilise le connecteur Meta réel (avec fallback automatique si token simulé)
+    this.connectors.set("INSTAGRAM_BUSINESS", new MetaPublishingConnector("INSTAGRAM_BUSINESS"));
+    this.connectors.set("FACEBOOK_PAGE", new MetaPublishingConnector("FACEBOOK_PAGE"));
   }
 
   getConnector(provider: ChannelProvider): PublishingConnector {
