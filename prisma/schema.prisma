@@ -1,0 +1,562 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -------------------------------------------------------------
+// 1. ESPACE AGENCE & ACCÈS (IAM)
+// -------------------------------------------------------------
+
+model AgencyWorkspace {
+  id              String           @id @default(cuid())
+  name            String
+  slug            String           @unique
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  memberships     Membership[]
+  managedProfiles ManagedProfile[]
+  auditLogs       AuditLog[]
+
+  @@map("agency_workspaces")
+}
+
+model User {
+  id              String          @id @default(cuid())
+  email           String          @unique
+  name            String
+  avatarUrl       String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  memberships     Membership[]
+  profileAccesses ProfileAccess[]
+  auditLogs       AuditLog[]
+
+  @@map("users")
+}
+
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  COLLABORATOR
+}
+
+model Membership {
+  id                String          @id @default(cuid())
+  userId            String
+  agencyWorkspaceId String
+  role              WorkspaceRole   @default(COLLABORATOR)
+  createdAt         DateTime        @default(now())
+
+  user              User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace         AgencyWorkspace @relation(fields: [agencyWorkspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, agencyWorkspaceId])
+  @@map("memberships")
+}
+
+// -------------------------------------------------------------
+// 2. PROFILS GÉRÉS (ARTISTES / LIEUX)
+// -------------------------------------------------------------
+
+enum ProfileType {
+  ARTIST
+  VENUE
+}
+
+enum DelegationMode {
+  AUTONOMOUS  // L'artiste gère lui-même ses publications
+  DELEGATED   // L'agence se connecte et publie pour l'artiste
+}
+
+model ManagedProfile {
+  id                String          @id @default(cuid())
+  agencyWorkspaceId String
+  name              String
+  slug              String          @unique
+  type              ProfileType     @default(ARTIST)
+  delegationMode    DelegationMode  @default(DELEGATED)
+  avatarUrl         String?
+  bio               String?
+  brandColor        String?         @default("#e11d48")
+  socialLinks       Json?           // { instagram: "...", facebook: "...", spotify: "..." }
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  agencyWorkspace   AgencyWorkspace @relation(fields: [agencyWorkspaceId], references: [id], onDelete: Cascade)
+  profileAccesses   ProfileAccess[]
+  channelConnections ChannelConnection[]
+  linkPage          LinkPage?
+  assets            Asset[]
+  catalogItems      CatalogItem[]
+  campaigns         Campaign[]
+  auditLogs         AuditLog[]
+
+  @@map("managed_profiles")
+}
+
+enum ProfileAccessRole {
+  OWNER         // Artiste propriétaire
+  COLLABORATOR  // Accès délégué
+}
+
+model ProfileAccess {
+  id               String            @id @default(cuid())
+  userId           String
+  managedProfileId String
+  role             ProfileAccessRole @default(OWNER)
+  createdAt        DateTime          @default(now())
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile          ManagedProfile    @relation(fields: [managedProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, managedProfileId])
+  @@map("profile_accesses")
+}
+
+// -------------------------------------------------------------
+// 3. CONNEXIONS RÉSEAUX SOCIAUX & CREDENTIALS
+// -------------------------------------------------------------
+
+enum ChannelProvider {
+  INSTAGRAM_BUSINESS
+  FACEBOOK_PAGE
+  FACEBOOK_PERSONAL_ASSISTED
+  FACEBOOK_GROUP_ASSISTED
+}
+
+model ChannelConnection {
+  id                  String           @id @default(cuid())
+  managedProfileId    String
+  provider            ChannelProvider
+  externalAccountId   String
+  externalAccountName String
+  isConnected         Boolean          @default(true)
+  lastCheckedAt       DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  managedProfile      ManagedProfile   @relation(fields: [managedProfileId], references: [id], onDelete: Cascade)
+  credential          OAuthCredential?
+  publicationTargets  PublicationTarget[]
+
+  @@unique([managedProfileId, provider, externalAccountId])
+  @@map("channel_connections")
+}
+
+model OAuthCredential {
+  id                  String            @id @default(cuid())
+  channelConnectionId String            @unique
+  encryptedToken      String            // Chiffré au repos (AES-256-GCM / KMS)
+  encryptedRefreshToken String?
+  expiresAt           DateTime?
+  scopes              String[]
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  channelConnection   ChannelConnection @relation(fields: [channelConnectionId], references: [id], onDelete: Cascade)
+
+  @@map("oauth_credentials")
+}
+
+// -------------------------------------------------------------
+// 4. PAGE PUBLIQUE "LIEN EN BIO" (Façon Stan)
+// -------------------------------------------------------------
+
+model LinkPage {
+  id               String         @id @default(cuid())
+  managedProfileId String         @unique
+  slug             String         @unique
+  title            String
+  bio              String?
+  avatarUrl        String?
+  isPublished      Boolean        @default(true)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  managedProfile   ManagedProfile @relation(fields: [managedProfileId], references: [id], onDelete: Cascade)
+  linkItems        LinkItem[]
+
+  @@map("link_pages")
+}
+
+enum LinkItemType {
+  CUSTOM
+  CAMPAIGN
+  CATALOG
+  TICKETING
+}
+
+model LinkItem {
+  id          String       @id @default(cuid())
+  linkPageId  String
+  title       String
+  url         String
+  imageUrl    String?
+  order       Int          @default(0)
+  isActive    Boolean      @default(true)
+  type        LinkItemType @default(CUSTOM)
+  campaignId  String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  linkPage    LinkPage     @relation(fields: [linkPageId], references: [id], onDelete: Cascade)
+
+  @@map("link_items")
+}
+
+// -------------------------------------------------------------
+// 5. CATALOGUE MUSICAL & VIDÉO (Spotify / YouTube)
+// -------------------------------------------------------------
+
+enum CatalogSourceProvider {
+  SPOTIFY
+  YOUTUBE
+}
+
+model CatalogItem {
+  id                    String                @id @default(cuid())
+  managedProfileId      String
+  sourceProvider        CatalogSourceProvider
+  canonicalUrl          String
+  externalId            String?
+  title                 String
+  releaseDate           DateTime?
+  thumbnailUrl          String?
+  sourceMetadataSnapshot Json?                // Données brutes de provenance
+  titleOverride         String?
+  releaseDateOverride   DateTime?
+  thumbnailOverrideUrl  String?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  managedProfile        ManagedProfile        @relation(fields: [managedProfileId], references: [id], onDelete: Cascade)
+  campaigns             Campaign[]
+  assets                Asset[]
+
+  @@unique([managedProfileId, canonicalUrl])
+  @@map("catalog_items")
+}
+
+// -------------------------------------------------------------
+// 6. MÉDIAS (ORIGINAUX & RENDUS DÉTERMINISTES)
+// -------------------------------------------------------------
+
+model Asset {
+  id               String          @id @default(cuid())
+  managedProfileId String
+  catalogItemId    String?
+  originalFilename String
+  mimeType         String
+  sizeBytes        BigInt
+  s3Key            String
+  publicUrl        String?
+  durationSeconds  Float?
+  width            Int?
+  height           Int?
+  hasAudio         Boolean         @default(false)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  managedProfile   ManagedProfile  @relation(fields: [managedProfileId], references: [id], onDelete: Cascade)
+  catalogItem      CatalogItem?    @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  renditions       AssetRendition[]
+  variantAssets    ContentVariantAsset[]
+
+  @@map("assets")
+}
+
+enum RenditionRatio {
+  RATIO_9_16  // 1080x1920 (Reel / Story)
+  RATIO_4_5   // 1080x1350 (Feed Portrait)
+  RATIO_1_1   // 1080x1080 (Feed Carré)
+  THUMBNAIL
+}
+
+model AssetRendition {
+  id            String          @id @default(cuid())
+  assetId       String
+  ratio         RenditionRatio
+  mimeType      String
+  s3Key         String
+  publicUrl     String
+  width         Int
+  height        Int
+  createdAt     DateTime        @default(now())
+
+  asset         Asset           @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  variantAssets ContentVariantAsset[]
+
+  @@map("asset_renditions")
+}
+
+// -------------------------------------------------------------
+// 7. CAMPAGNES & VARIANTES DE CONTENU
+// -------------------------------------------------------------
+
+enum CampaignScenario {
+  SINGLE_RELEASE
+  ALBUM_RELEASE
+  CONCERT
+  CATALOG_REVIVAL
+}
+
+enum CampaignStatus {
+  DRAFT
+  ACTIVE
+  COMPLETED
+  ARCHIVED
+}
+
+model Campaign {
+  id               String           @id @default(cuid())
+  managedProfileId String
+  catalogItemId    String?
+  title            String
+  scenario         CampaignScenario
+  status           CampaignStatus   @default(DRAFT)
+  sourceSnapshot   Json?            // Copie personnalisable des métadonnées sources
+  startDate        DateTime?
+  endDate          DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  managedProfile   ManagedProfile   @relation(fields: [managedProfileId], references: [id], onDelete: Cascade)
+  catalogItem      CatalogItem?     @relation(fields: [catalogItemId], references: [id], onDelete: SetNull)
+  variants         ContentVariant[]
+  plans            PublicationPlan[]
+
+  @@map("campaigns")
+}
+
+enum SocialNetwork {
+  INSTAGRAM
+  FACEBOOK
+}
+
+enum SocialFormat {
+  FEED_POST
+  REEL
+  STORY
+}
+
+model ContentVariant {
+  id                 String           @id @default(cuid())
+  campaignId         String
+  network            SocialNetwork
+  format             SocialFormat
+  caption            String           @db.Text
+  hasBioWatermark    Boolean          @default(false)
+  audioCatalogId     String?          // Instagram Audio API Sound ID
+  audioCatalogTitle  String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  campaign           Campaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  assets             ContentVariantAsset[]
+  occurrences        PublicationOccurrence[]
+
+  @@unique([campaignId, network, format])
+  @@map("content_variants")
+}
+
+model ContentVariantAsset {
+  id               String          @id @default(cuid())
+  contentVariantId String
+  assetId          String?
+  assetRenditionId String?
+  order            Int             @default(0)
+  createdAt        DateTime        @default(now())
+
+  contentVariant   ContentVariant  @relation(fields: [contentVariantId], references: [id], onDelete: Cascade)
+  asset            Asset?          @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  rendition        AssetRendition? @relation(fields: [assetRenditionId], references: [id], onDelete: SetNull)
+
+  @@map("content_variant_assets")
+}
+
+// -------------------------------------------------------------
+// 8. PLANIFICATION & EXÉCUTION (MACHINE D'ÉTAT & OUTBOX)
+// -------------------------------------------------------------
+
+enum PlanScheduleMode {
+  NOW
+  EXACT_DATETIME
+  MANUAL_DATES
+  RECURRENCE_RULE
+}
+
+enum RecurrenceFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+}
+
+model PublicationPlan {
+  id                  String               @id @default(cuid())
+  campaignId          String
+  scheduleMode        PlanScheduleMode     @default(EXACT_DATETIME)
+  frequency           RecurrenceFrequency?
+  timezone            String               @default("UTC")
+  recurrenceRule      Json?                // Règle détaillée { interval, daysOfWeek, end }
+  approvedRevisionId  String?
+  isPaused            Boolean              @default(false)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  campaign            Campaign             @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  occurrences         PublicationOccurrence[]
+
+  @@map("publication_plans")
+}
+
+enum OccurrenceStatus {
+  DRAFT
+  NEEDS_APPROVAL
+  APPROVED
+  SCHEDULED
+  PREPARING      // Téléchargement / packaging média (Annulable en dernière minute)
+  PUBLISHING     // Appel API réseau en cours
+  PUBLISHED      // Publication confirmée
+  UNKNOWN        // Timeout ambigu (nécessite réconciliation)
+  FAILED         // Erreur définitive
+  CANCELLED      // Annulé par l'utilisateur
+}
+
+model PublicationOccurrence {
+  id                 String             @id @default(cuid())
+  publicationPlanId  String
+  contentVariantId   String
+  scheduledAt        DateTime
+  status             OccurrenceStatus   @default(SCHEDULED)
+  revisionNumber     Int                @default(1)
+  approvedByUserId   String?
+  approvedAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  plan               PublicationPlan    @relation(fields: [publicationPlanId], references: [id], onDelete: Cascade)
+  variant            ContentVariant     @relation(fields: [contentVariantId], references: [id], onDelete: Cascade)
+  targets            PublicationTarget[]
+
+  @@index([scheduledAt, status])
+  @@map("publication_occurrences")
+}
+
+enum DestinationType {
+  OFFICIAL_API
+  ASSISTED_PUSH
+}
+
+enum TargetStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  UNKNOWN
+  FAILED
+  CANCELLED
+}
+
+model PublicationTarget {
+  id                      String                @id @default(cuid())
+  publicationOccurrenceId String
+  channelConnectionId     String
+  destinationType         DestinationType       @default(OFFICIAL_API)
+  status                  TargetStatus          @default(PENDING)
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
+
+  occurrence              PublicationOccurrence @relation(fields: [publicationOccurrenceId], references: [id], onDelete: Cascade)
+  channelConnection       ChannelConnection     @relation(fields: [channelConnectionId], references: [id], onDelete: Cascade)
+  attempts                PublishAttempt[]
+  remotePost              RemotePost?
+
+  @@map("publication_targets")
+}
+
+enum AttemptStatus {
+  SUCCESS
+  UNKNOWN
+  FAILED
+}
+
+model PublishAttempt {
+  id                  String            @id @default(cuid())
+  publicationTargetId String
+  attemptNumber       Int               @default(1)
+  status              AttemptStatus
+  errorMessage        String?           @db.Text
+  rawResponse         Json?
+  startedAt           DateTime          @default(now())
+  finishedAt          DateTime?
+
+  target              PublicationTarget @relation(fields: [publicationTargetId], references: [id], onDelete: Cascade)
+
+  @@map("publish_attempts")
+}
+
+model RemotePost {
+  id                  String            @id @default(cuid())
+  publicationTargetId String            @unique
+  remotePostId        String            // ID distant fourni par Meta / Instagram
+  permalinkUrl        String            @db.Text
+  metricsSnapshot     Json?             // { likes, impressions, reach, comments }
+  publishedAt         DateTime          @default(now())
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  target              PublicationTarget @relation(fields: [publicationTargetId], references: [id], onDelete: Cascade)
+
+  @@map("remote_posts")
+}
+
+// -------------------------------------------------------------
+// 9. OUTBOX PATTERN & AUDIT (TRAÇABILITÉ & ROBUSTESSE)
+// -------------------------------------------------------------
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model OutboxEvent {
+  id          String       @id @default(cuid())
+  eventType   String       // ex: PUBLISH_OCCURRENCE, MEDIA_TRANSCODE
+  payload     Json
+  status      OutboxStatus @default(PENDING)
+  retryCount  Int          @default(0)
+  runAt       DateTime     @default(now())
+  error       String?      @db.Text
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([status, runAt])
+  @@map("outbox_events")
+}
+
+model AuditLog {
+  id                String           @id @default(cuid())
+  agencyWorkspaceId String?
+  managedProfileId  String?
+  userId            String?
+  action            String           // ex: CONNECT_CHANNEL, APPROVE_SERIES, CANCEL_PUBLICATION
+  targetType        String           // ex: CAMPAIGN, OCCURRENCE, PROFILE
+  targetId          String
+  details           Json?
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime         @default(now())
+
+  workspace         AgencyWorkspace? @relation(fields: [agencyWorkspaceId], references: [id], onDelete: SetNull)
+  profile           ManagedProfile?  @relation(fields: [managedProfileId], references: [id], onDelete: SetNull)
+  user              User?            @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
